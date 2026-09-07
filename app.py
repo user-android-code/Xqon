@@ -1,105 +1,104 @@
-import streamlit as st
 import torch
 import torch.nn as nn
-import torchvision.utils as vutils
-from PIL import Image
-import hashlib
-from huggingface_hub import hf_hub_download
 
-st.set_page_config(page_title="GAN .pth 読み込み推論アプリ", layout="wide")
+# --- Generator (生成器) ---
+class Generator256CPU(nn.Module):
+    def __init__(self, z_dim=100, feature_maps=32):
+        """
+        CPU軽量版 Generator (256x256)
+        計算量を抑えるため feature_maps の初期値を小さめ(32)に設定
+        """
+        super().__init__()
+        
+        # 潜在ベクトル z (100) -> 4x4 に投影
+        self.fc = nn.Sequential(
+            nn.Linear(z_dim, feature_maps * 8 * 4 * 4),
+            nn.BatchNorm1d(feature_maps * 8 * 4 * 4),
+            nn.ReLU(True)
+        )
+        self.feature_maps = feature_maps
 
-st.title("🎨 実在モデル：CelebA GAN 画像生成")
-st.write("Hugging Face公式のリポジトリから確実に存在する `dcgan-celeba.pth` を自動ロードして計算します。")
+        # アップサンプリングブロック (4x4 -> 256x256)
+        def up_block(in_c, out_c):
+            return nn.Sequential(
+                nn.Upsample(scale_factor=2, mode='nearest'),
+                nn.Conv2d(in_c, out_c, kernel_size=3, stride=1, padding=1, bias=False),
+                nn.BatchNorm2d(out_c),
+                nn.ReLU(True)
+            )
 
-# ---------------------------------------------------------
-# 1. dcgan-celeba.pth に適合する Generator 構造定義
-# ---------------------------------------------------------
-class Generator(nn.Module):
-    def __init__(self, nz=100, ngf=64, nc=3):
-        super(Generator, self).__init__()
-        self.main = nn.Sequential(
-            # 入力: (batch, 100, 1, 1) -> 64x64 画像を出力
-            nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=False), # 4x4
-            nn.BatchNorm2d(ngf * 8),
-            nn.ReLU(True),
-            nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False), # 8x8
-            nn.BatchNorm2d(ngf * 4),
-            nn.ReLU(True),
-            nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False), # 16x16
-            nn.BatchNorm2d(ngf * 2),
-            nn.ReLU(True),
-            nn.ConvTranspose2d(ngf * 2, ngf, 4, 2, 1, bias=False), # 32x32
-            nn.BatchNorm2d(ngf),
-            nn.ReLU(True),
-            nn.ConvTranspose2d(ngf, nc, 4, 2, 1, bias=False), # 64x64
-            nn.Tanh()
+        self.net = nn.Sequential(
+            # 4x4 -> 8x8
+            up_block(feature_maps * 8, feature_maps * 8),
+            # 8x8 -> 16x16
+            up_block(feature_maps * 8, feature_maps * 4),
+            # 16x16 -> 32x32
+            up_block(feature_maps * 4, feature_maps * 4),
+            # 32x32 -> 64x64
+            up_block(feature_maps * 4, feature_maps * 2),
+            # 64x64 -> 128x128
+            up_block(feature_maps * 2, feature_maps),
+            # 128x128 -> 256x256
+            nn.Upsample(scale_factor=2, mode='nearest'),
+            nn.Conv2d(feature_maps, 3, kernel_size=3, stride=1, padding=1),
+            nn.Tanh() # 出力を [-1, 1] に正規化
         )
 
-    def forward(self, input):
-        return self.main(input)
+    def forward(self, z):
+        x = self.fc(z)
+        x = x.view(-1, self.feature_maps * 8, 4, 4)
+        return self.net(x)
 
-# ---------------------------------------------------------
-# 2. Hugging Face 公式の動作確認済み .pth ファイルをロード
-# ---------------------------------------------------------
-@st.cache_resource
-def load_gan_model():
-    # ★確実に存在するHugging Face公式ドキュメント用の公開モデル
-    repo_id = "huggingface/hub-docs"
-    filename = "dcgan-celeba.pth"
-    
-    # ダウンロード実行
-    weights_path = hf_hub_download(repo_id=repo_id, filename=filename)
-    
-    model = Generator()
-    state_dict = torch.load(weights_path, map_location=torch.device('cpu'))
-    
-    # キー名に 'main.' が入っている場合の吸収処理
-    model.load_state_dict(state_dict, strict=False)
-    model.eval()
-    return model, repo_id, filename
+# --- Discriminator (識別器) ---
+class Discriminator256CPU(nn.Module):
+    def __init__(self, feature_maps=32):
+        """
+        CPU軽量版 Discriminator (256x256)
+        """
+        super().__init__()
+        
+        def down_block(in_c, out_c, normalize=True):
+            layers = [nn.Conv2d(in_c, out_c, kernel_size=4, stride=2, padding=1, bias=False)]
+            if normalize:
+                layers.append(nn.BatchNorm2d(out_c))
+            layers.append(nn.LeakyReLU(0.2, inplace=True))
+            return nn.Sequential(*layers)
 
-# モデル読み込み実行
-try:
-    with st.spinner("Hugging Face からモデル (dcgan-celeba.pth) を取得中..."):
-        model, loaded_repo, loaded_file = load_gan_model()
-    st.sidebar.success(f"ロード成功:\n{loaded_repo}/{loaded_file}")
-except Exception as e:
-    st.error(f"エラーが発生しました: {e}")
-    st.stop()
+        self.net = nn.Sequential(
+            # 256x256 -> 128x128
+            down_block(3, feature_maps, normalize=False),
+            # 128x128 -> 64x64
+            down_block(feature_maps, feature_maps * 2),
+            # 64x64 -> 32x32
+            down_block(feature_maps * 2, feature_maps * 4),
+            # 32x32 -> 16x16
+            down_block(feature_maps * 4, feature_maps * 4),
+            # 16x16 -> 8x8
+            down_block(feature_maps * 4, feature_maps * 8),
+            # 8x8 -> 4x4
+            down_block(feature_maps * 8, feature_maps * 8),
+            # 判定 (1次元へ)
+            nn.Conv2d(feature_maps * 8, 1, kernel_size=4, stride=1, padding=0),
+            nn.Sigmoid()
+        )
 
-# ---------------------------------------------------------
-# 3. メイン画面：プロンプト入力からノイズ計算・推論
-# ---------------------------------------------------------
-prompt = st.text_input("生成プロンプト（例: 'person A', 'cool face'）", value="fashion model")
+    def forward(self, img):
+        return self.net(img).view(-1, 1)
 
-if st.button("画像生成（推論を実行）"):
-    if not prompt:
-        st.warning("プロンプトを入力してね！")
-    else:
-        with st.spinner("GANモデルで順伝播計算中..."):
-            # プロンプトの文字列からシード値を算出
-            seed = int(hashlib.md5(prompt.encode('utf-8')).hexdigest(), 16) % (2**32)
-            torch.manual_seed(seed)
-            
-            # 100次元の潜在ノイズベクトル (1, 100, 1, 1)
-            z = torch.randn(1, 100, 1, 1)
+# --- 動作確認用メイン処理 ---
+if __name__ == "__main__":
+    device = torch.device("cpu")
+    print(f"実行デバイス: {device}")
 
-            # 推論計算
-            with torch.no_grad():
-                fake_tensor = model(z)
-                # Tanh出力 [-1, 1] を [0, 1] に補正
-                fake_tensor = (fake_tensor + 1) / 2.0
-                
-                # Pillow画像に変換
-                grid = vutils.make_grid(fake_tensor, normalize=False)
-                ndarr = grid.mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to("cpu", torch.uint8).numpy()
-                result_img = Image.fromarray(ndarr)
+    # モデルインスタンス化
+    netG = Generator256CPU().to(device)
+    netD = Discriminator256CPU().to(device)
 
-        # 結果表示
-        col1, col2 = st.columns(2)
-        with col1:
-            st.image(result_img, caption=f"生成結果: '{prompt}'", width=256)
-        with col2:
-            st.subheader("計算ステータス")
-            st.write(f"**生成シード値:** `{seed}`")
-            st.write(f"**使用モデル:** `{loaded_repo}/{loaded_file}`")
+    # 1. 画像生成のテスト (推論)
+    z = torch.randn(2, 100, device=device) # バッチサイズ2, 潜在変数100
+    fake_images = netG(z)
+    print(f"生成画像サイズ: {fake_images.shape}") # [2, 3, 256, 256]
+
+    # 2. 識別器のテスト
+    validity = netD(fake_images)
+    print(f"識別結果サイズ: {validity.shape}") # [2, 1]
