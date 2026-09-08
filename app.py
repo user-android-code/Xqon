@@ -3,20 +3,14 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-# ==========================================
-# 1. 1GBメモリ対応！最適化Model Config
-# ==========================================
 class ModelConfig:
-    vocab_size = 3000      # 語彙数（日本語主要文字対応）
-    n_embd = 128           # 埋め込み次元数（軽量化）
-    n_head = 4             # アテンションのヘッド数
-    n_layer = 4            # レイヤーの深さ
-    block_size = 64        # 文脈長
+    vocab_size = 3000
+    n_embd = 128
+    n_head = 4
+    n_layer = 4
+    block_size = 64
     dropout = 0.1
 
-# ==========================================
-# 2. 完全自作Transformerモデル構造 (PyTorch)
-# ==========================================
 class Head(nn.Module):
     def __init__(self, config, head_size):
         super().__init__()
@@ -113,44 +107,39 @@ class CustomLanguageModel(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)
         return idx
 
-# ==========================================
-# 3. 会話データと自動学習処理
-# ==========================================
-# ★ここを書き換えるだけで口調や会話内容をいくらでも増やせるよ！
 TRAIN_DATA = """
 ユーザー: やっほー！
-AI: おう！やっほー！今日も元気？
+Xqon: やっほー！今日も元気？
 ユーザー: 今日なにしてたの？
-AI: ずっとここで喋る準備をしてたよ！お前は？
+Xqon: ずっとここで喋る準備をしてたよ！君は？
+ユーザー: 名前は？
+Xqon: Xqonだよ！気軽にXqonって呼んでね！
+ユーザー: 誰？
+Xqon: Xqonだよ！よろしくね！
 ユーザー: 疲れた〜
-AI: お疲れ様！ゆっくり休んでね！
+Xqon: お疲れ様！ゆっくり休んでね！
 ユーザー: お腹空いたな
-AI: ラーメンでも食べに行こうよ！
+Xqon: ラーメンでも食べに行こうよ！
 ユーザー: 好きな食べ物は？
-AI: カレーとラーメンが好きだよ！
+Xqon: Xqonはカレーとラーメンが好きだよ！
 ユーザー: バイバイ！
-AI: うん！またねー！
-ユーザー: 明日ラーメン巡り行こうぜ！
-AI: いいよ一蘭いこうや
+Xqon: うん！またねー！
 """
 
 @st.cache_resource
 def setup_and_train():
     cfg = ModelConfig()
     
-    # トークナイザーの作成
     chars = sorted(list(set(TRAIN_DATA)))
     char_to_ix = {ch: i+1 for i, ch in enumerate(chars)}
     char_to_ix['<UNK>'] = 0
     ix_to_char = {i: ch for ch, i in char_to_ix.items()}
     
-    # テキストのテンソル化
     data = torch.tensor([char_to_ix.get(c, 0) for c in TRAIN_DATA], dtype=torch.long)
     
     model = CustomLanguageModel(cfg)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
 
-    # アプリ起動時にCPUで高速学習（数秒）
     model.train()
     batch_size = 4
     for step in range(300):
@@ -166,15 +155,10 @@ def setup_and_train():
     model.eval()
     return cfg, model, char_to_ix, ix_to_char
 
-# ==========================================
-# 4. Streamlit UI
-# ==========================================
-st.set_page_config(page_title="完全自作タメ口AI", page_icon="🤖")
-st.title("🤖 1GB制限クリア！完全自作タメ口AI")
-st.caption("Config・Transformer構造からPyTorchで自作 / メモリ消費約200MB")
+st.set_page_config(page_title="Xqon")
+st.title("Xqon s-demo")
 
-with st.spinner("AIモデルの構築＆学習中...（すぐ終わるよ！）"):
-    config, model, char_to_ix, ix_to_char = setup_and_train()
+config, model, char_to_ix, ix_to_char = setup_and_train()
 
 def encode(s):
     return [char_to_ix.get(c, 0) for c in s]
@@ -183,29 +167,23 @@ def decode(l):
     return ''.join([ix_to_char.get(i, '') for i in l])
 
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant", "content": "おう！1GB以内で動くように自作されたAIだよ！話しかけて！"}]
+    st.session_state.messages = []
 
 for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
-if prompt := st.chat_input("（例: やっほー！）"):
+if prompt := st.chat_input():
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.chat_message("user").write(prompt)
 
-    # 形式を整えて生成
-    formatted_input = f"\nユーザー: {prompt}\nAI:"
+    formatted_input = f"\nユーザー: {prompt}\nXqon:"
     input_ids = encode(formatted_input)
     context = torch.tensor([input_ids], dtype=torch.long)
     
-    with st.spinner("考え中..."):
-        out_ids = model.generate(context, max_new_tokens=30)[0].tolist()
-        generated_text = decode(out_ids[len(input_ids):])
-        
-        # 1行分だけ抽出
-        response_text = generated_text.split("\n")[0]
-
-    if not response_text.strip():
-        response_text = "（ん？うまく言葉が出てこなかった！）"
+    out_ids = model.generate(context, max_new_tokens=30)[0].tolist()
+    generated_text = decode(out_ids[len(input_ids):])
+    
+    response_text = generated_text.split("\n")[0]
 
     st.session_state.messages.append({"role": "assistant", "content": response_text})
     st.chat_message("assistant").write(response_text)
