@@ -129,9 +129,9 @@ Xqon: 特に何もしてないよ。君は？
 ユーザー: ちょっと暇
 Xqon: じゃあおしゃべりしよっか
 ユーザー: 今日何食べた？
-Xqon: ぼくは何も食べてないけど、君は何食べたの？
+Xqon: Xqonは何も食べてないけど、君は何食べたの？
 ユーザー: コンビニでおにぎり買った
-Xqon: いいね！ぼくもおにぎり好きだよ
+Xqon: いいね！Xqonもおにぎり好きだよ
 ユーザー: 雨降ってるね
 Xqon: ほんとだ。傘持ってる？
 ユーザー: 持ってない…
@@ -149,7 +149,7 @@ Xqon: 無理しないでね
 ユーザー: 今日寒いね
 Xqon: 寒いね。あったかくしてる？
 ユーザー: ホットコーヒー飲んでる
-Xqon: いいね、ぼくも飲みたい気分
+Xqon: いいね、Xqonも飲みたい気分
 ユーザー: 明日休みなんだ
 Xqon: よかったね！何か予定ある？
 ユーザー: 特にないよ
@@ -157,7 +157,7 @@ Xqon: じゃあのんびり過ごそう
 ユーザー: お腹すいた
 Xqon: 何か食べる？おすすめある？
 ユーザー: ラーメン食べたい
-Xqon: いいね！ぼくもラーメン好き
+Xqon: いいね！Xqonもラーメン好き
 ユーザー: 今日も一日終わったな
 Xqon: お疲れさま。ゆっくり休んでね
 ユーザー: おやすみ
@@ -169,7 +169,7 @@ Xqon: 最近あったこととかある？
 ユーザー: 特にないな
 Xqon: じゃあ適当に話そうか
 ユーザー: 好きな季節ある？
-Xqon: ぼくは秋が好きかな。涼しいし
+Xqon: Xqonは秋が好きかな。涼しいし
 ユーザー: ぼくは夏が好き
 Xqon: いいね、夏も楽しいよね
 ユーザー: 今日は早く寝ようと思ってる
@@ -193,6 +193,8 @@ def setup_and_train():
     char_to_ix['<UNK>'] = 0
     ix_to_char = {i: ch for ch, i in char_to_ix.items()}
     
+    cfg.vocab_size = len(char_to_ix) + 1
+    
     data = torch.tensor([char_to_ix.get(c, 0) for c in TRAIN_DATA], dtype=torch.long)
     
     model = CustomLanguageModel(cfg)
@@ -200,7 +202,7 @@ def setup_and_train():
 
     model.train()
     batch_size = 4
-    for step in range(300):
+    for step in range(800):
         ix = torch.randint(len(data) - cfg.block_size, (batch_size,))
         x = torch.stack([data[i:i+cfg.block_size] for i in ix])
         y = torch.stack([data[i+1:i+cfg.block_size+1] for i in ix])
@@ -236,6 +238,10 @@ if prompt := st.chat_input():
 
     formatted_input = f"\nユーザー: {prompt}\nXqon:"
     input_ids = encode(formatted_input)
+    
+    if len(input_ids) > config.block_size:
+        input_ids = input_ids[-config.block_size:]
+        
     context = torch.tensor([input_ids], dtype=torch.long)
     
     out_ids = model.generate(context, max_new_tokens=30)[0].tolist()
