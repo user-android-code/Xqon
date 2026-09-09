@@ -8,7 +8,7 @@ class ModelConfig:
     vocab_size = 50257
     n_embd = 768
     n_head = 12
-    n_layer = 10
+    n_layer = 8
     block_size = 128
     dropout = 0.1
 
