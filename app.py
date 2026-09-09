@@ -8,7 +8,7 @@ class ModelConfig:
     vocab_size = 50257
     n_embd = 768
     n_head = 12
-    n_layer = 6
+    n_layer = 8
     block_size = 64
     dropout = 0.1
 
@@ -152,10 +152,10 @@ def setup_model():
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
 
     model.train()
-    batch_size = 2
+    batch_size = 1
     block_size = cfg.block_size
     
-    for step in range(100):
+    for step in range(20):
         if len(data) <= block_size:
             break
         ix = torch.randint(len(data) - block_size, (batch_size,))
