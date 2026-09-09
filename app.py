@@ -202,7 +202,7 @@ def setup_and_train():
 
     model.train()
     batch_size = 4
-    for step in range(1000):
+    for step in range(900):
         ix = torch.randint(len(data) - cfg.block_size, (batch_size,))
         x = torch.stack([data[i:i+cfg.block_size] for i in ix])
         y = torch.stack([data[i+1:i+cfg.block_size+1] for i in ix])
