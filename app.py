@@ -130,7 +130,7 @@ Xqon: 特に何もしてないよ。君は？
 Xqon: じゃあおしゃべりしよっか
 ユーザー: 今日何食べた？
 Xqon: Xqonは何も食べてないけど、君は何食べたの？
-ユーザー: コンビニでおにぎり買った
+ユーザー: コンコンビニでおにぎり買った
 Xqon: いいね！Xqonもおにぎり好きだよ
 ユーザー: 雨降ってるね
 Xqon: ほんとだ。傘持ってる？
@@ -202,7 +202,7 @@ def setup_and_train():
 
     model.train()
     batch_size = 4
-    for step in range(900):
+    for step in range(850):
         ix = torch.randint(len(data) - cfg.block_size, (batch_size,))
         x = torch.stack([data[i:i+cfg.block_size] for i in ix])
         y = torch.stack([data[i+1:i+cfg.block_size+1] for i in ix])
