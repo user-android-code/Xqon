@@ -2,9 +2,10 @@ import streamlit as st
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+import tiktoken
 
 class ModelConfig:
-    vocab_size = 10000
+    vocab_size = 50257
     n_embd = 768
     n_head = 12
     n_layer = 8
@@ -117,20 +118,9 @@ class CustomLanguageModel(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)
         return idx
 
-class CustomTokenizer:
-    def __init__(self, text, vocab_size=10000):
-        chars = sorted(list(set(text)))
-        self.char2idx = {ch: i+1 for i, ch in enumerate(chars)}
-        self.idx2char = {i+1: ch for i, ch in enumerate(chars)}
-        self.vocab_size = vocab_size
-
-    def encode(self, text):
-        return [self.char2idx.get(c, 0) % self.vocab_size for c in text]
-
-    def decode(self, tokens):
-        return "".join([self.idx2char.get(i, "") for i in tokens])
-
 TRAIN_DATA = """
+User: こんにちは
+Xqon: こんにちは！今日も調子はどう？
 User: やっほー！
 Xqon: やっほー！今日も調子はどう？
 User: Hey!
@@ -145,18 +135,14 @@ User: Who are you?
 Xqon: I'm Xqon, your friendly AI companion!
 User: 何か楽しいことないかな？
 Xqon: 一緒に何か面白い話でもしようか！何が好き？
-User: I'm bored.
-Xqon: Let's chat! Tell me about your favorite hobbies.
 User: ありがとう！
 Xqon: どういたしまして！いつでも気軽に話しかけてね。
-User: Thanks!
-Xqon: You're welcome! I'm always here to talk.
 """
 
 @st.cache_resource
 def setup_model():
     cfg = ModelConfig()
-    enc = CustomTokenizer(TRAIN_DATA, vocab_size=cfg.vocab_size)
+    enc = tiktoken.get_encoding("gpt2")
     
     model = CustomLanguageModel(cfg)
     
@@ -169,7 +155,7 @@ def setup_model():
     batch_size = 2
     block_size = cfg.block_size
     
-    for step in range(200):
+    for step in range(300):
         if len(data) <= block_size:
             break
         ix = torch.randint(len(data) - block_size, (batch_size,))
@@ -207,7 +193,7 @@ if prompt := st.chat_input():
         
     context = torch.tensor([input_ids], dtype=torch.long)
     
-    out_ids = model.generate(context, max_new_tokens=40, temperature=0.6, top_k=5)[0].tolist()
+    out_ids = model.generate(context, max_new_tokens=40, temperature=0.5, top_k=5)[0].tolist()
     generated_text = enc.decode(out_ids[len(input_ids):])
     
     response_text = generated_text.split("\n")[0].strip()
