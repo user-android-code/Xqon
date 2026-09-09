@@ -5,10 +5,10 @@ from torch.nn import functional as F
 
 class ModelConfig:
     vocab_size = 3000
-    n_embd = 256
-    n_head = 8
-    n_layer = 6
-    block_size = 128
+    n_embd = 192
+    n_head = 6
+    n_layer = 4
+    block_size = 96
     dropout = 0.1
 
 class Head(nn.Module):
@@ -202,7 +202,7 @@ def setup_and_train():
 
     model.train()
     batch_size = 4
-    for step in range(2500):
+    for step in range(1200):
         ix = torch.randint(len(data) - cfg.block_size, (batch_size,))
         x = torch.stack([data[i:i+cfg.block_size] for i in ix])
         y = torch.stack([data[i+1:i+cfg.block_size+1] for i in ix])
