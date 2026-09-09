@@ -2,6 +2,9 @@ import streamlit as st
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from googletrans import Translator
+
+translator = Translator()
 
 class ModelConfig:
     vocab_size = 3000
@@ -281,7 +284,14 @@ if prompt := st.chat_input():
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.chat_message("user").write(prompt)
 
-    formatted_input = f"\nUser: {prompt}\nXqon:"
+    try:
+        user_lang = translator.detect(prompt).lang
+        english_prompt = translator.translate(prompt, dest='en').text
+    except:
+        user_lang = 'ja'
+        english_prompt = prompt
+
+    formatted_input = f"\nUser: {english_prompt}\nXqon:"
     input_ids = encode(formatted_input)
     
     if len(input_ids) > config.block_size:
@@ -292,7 +302,12 @@ if prompt := st.chat_input():
     out_ids = model.generate(context, max_new_tokens=30, temperature=0.7, top_k=5)[0].tolist()
     generated_text = decode(out_ids[len(input_ids):])
     
-    response_text = generated_text.split("\n")[0]
+    raw_response = generated_text.split("\n")[0]
 
-    st.session_state.messages.append({"role": "assistant", "content": response_text})
-    st.chat_message("assistant").write(response_text)
+    try:
+        translated_response = translator.translate(raw_response, dest=user_lang).text
+    except:
+        translated_response = raw_response
+
+    st.session_state.messages.append({"role": "assistant", "content": translated_response})
+    st.chat_message("assistant").write(translated_response)
