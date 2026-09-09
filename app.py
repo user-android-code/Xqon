@@ -8,8 +8,8 @@ class ModelConfig:
     vocab_size = 50257
     n_embd = 768
     n_head = 12
-    n_layer = 8
-    block_size = 128
+    n_layer = 6
+    block_size = 64
     dropout = 0.1
 
 class Head(nn.Module):
@@ -105,7 +105,7 @@ class CustomLanguageModel(nn.Module):
             return logits, None
 
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens, temperature=0.6, top_k=5):
+    def generate(self, idx, max_new_tokens, temperature=0.5, top_k=5):
         for _ in range(max_new_tokens):
             idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
             logits, _ = self(idx_cond)
@@ -155,7 +155,7 @@ def setup_model():
     batch_size = 2
     block_size = cfg.block_size
     
-    for step in range(300):
+    for step in range(100):
         if len(data) <= block_size:
             break
         ix = torch.randint(len(data) - block_size, (batch_size,))
