@@ -97,11 +97,20 @@ class CustomLanguageModel(nn.Module):
 
         return logits, loss
 
-    def generate(self, idx, max_new_tokens):
+    # ★ ここを「安全運転モード」にアップグレード！
+    def generate(self, idx, max_new_tokens, temperature=0.7, top_k=5):
         for _ in range(max_new_tokens):
             idx_cond = idx[:, -self.config.block_size:]
             logits, _ = self(idx_cond)
             logits = logits[:, -1, :]
+            
+            # 1. Temperature（温度）調整：値を小さくして確実性の高い文字を優先
+            logits = logits / temperature
+            
+            # 2. Top-k サンプリング：確率上位 top_k 個（ここでは5個）以外の余計な文字を排除
+            v, _ = torch.topk(logits, top_k)
+            logits[logits < v[:, [-1]]] = -float('Inf')
+            
             probs = F.softmax(logits, dim=-1)
             idx_next = torch.multinomial(probs, num_samples=1)
             idx = torch.cat((idx, idx_next), dim=1)
@@ -244,7 +253,8 @@ if prompt := st.chat_input():
         
     context = torch.tensor([input_ids], dtype=torch.long)
     
-    out_ids = model.generate(context, max_new_tokens=30)[0].tolist()
+    # generate呼び出し（temperatureとtop_kを指定）
+    out_ids = model.generate(context, max_new_tokens=30, temperature=0.7, top_k=5)[0].tolist()
     generated_text = decode(out_ids[len(input_ids):])
     
     response_text = generated_text.split("\n")[0]
