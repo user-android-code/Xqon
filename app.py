@@ -2,187 +2,163 @@ import streamlit as st
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+import tiktoken
 
 class ModelConfig:
-    vocab_size = 3000
-    n_embd = 128
-    n_head = 4
-    n_layer = 4
-    block_size = 64
+    vocab_size = 100277
+    n_embd = 768
+    n_head = 12
+    n_layer = 12
+    block_size = 128
     dropout = 0.1
 
-class Head(nn.Module):
-    def __init__(self, config, head_size):
+class CausalSelfAttention(nn.Module):
+    def __init__(self, config):
         super().__init__()
-        self.key = nn.Linear(config.n_embd, head_size, bias=False)
-        self.query = nn.Linear(config.n_embd, head_size, bias=False)
-        self.value = nn.Linear(config.n_embd, head_size, bias=False)
-        self.register_buffer('tril', torch.tril(torch.ones(config.block_size, config.block_size)))
+        assert config.n_embd % config.n_head == 0
+        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd)
+        self.c_proj = nn.Linear(config.n_embd, config.n_embd)
+        self.attn_dropout = nn.Dropout(config.dropout)
+        self.resid_dropout = nn.Dropout(config.dropout)
+        self.n_head = config.n_head
+        self.n_embd = config.n_embd
+        self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
+                                     .view(1, 1, config.block_size, config.block_size))
+
+    def forward(self, x):
+        B, T, C = x.size()
+        q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+
+        att = (q @ k.transpose(-2, -1)) * (1.0 / (k.size(-1) ** 0.5))
+        att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+        att = F.softmax(att, dim=-1)
+        att = self.attn_dropout(att)
+        y = att @ v
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        return self.resid_dropout(self.c_proj(y))
+
+class MLP(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd)
+        self.gelu    = nn.GELU()
+        self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd)
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
-        B, T, C = x.shape
-        k = self.key(x)
-        q = self.query(x)
-        wei = q @ k.transpose(-2, -1) * (C ** -0.5)
-        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
-        wei = F.softmax(wei, dim=-1)
-        wei = self.dropout(wei)
-        v = self.value(x)
-        return wei @ v
-
-class MultiHeadAttention(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        head_size = config.n_embd // config.n_head
-        self.heads = nn.ModuleList([Head(config, head_size) for _ in range(config.n_head)])
-        self.proj = nn.Linear(config.n_embd, config.n_embd)
-        self.dropout = nn.Dropout(config.dropout)
-
-    def forward(self, x):
-        out = torch.cat([h(x) for h in self.heads], dim=-1)
-        return self.dropout(self.proj(out))
-
-class FeedForward(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(config.n_embd, 4 * config.n_embd),
-            nn.ReLU(),
-            nn.Linear(4 * config.n_embd, config.n_embd),
-            nn.Dropout(config.dropout),
-        )
-
-    def forward(self, x):
-        return self.net(x)
+        x = self.c_fc(x)
+        x = self.gelu(x)
+        x = self.c_proj(x)
+        return self.dropout(x)
 
 class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.sa = MultiHeadAttention(config)
-        self.ffwd = FeedForward(config)
-        self.ln1 = nn.LayerNorm(config.n_embd)
-        self.ln2 = nn.LayerNorm(config.n_embd)
+        self.ln_1 = nn.LayerNorm(config.n_embd)
+        self.attn = CausalSelfAttention(config)
+        self.ln_2 = nn.LayerNorm(config.n_embd)
+        self.mlp = MLP(config)
 
     def forward(self, x):
-        x = x + self.sa(self.ln1(x))
-        x = x + self.ffwd(self.ln2(x))
+        x = x + self.attn(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
         return x
 
-class CustomLanguageModel(nn.Module):
+class Custom100MLanguageModel(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.token_embedding_table = nn.Embedding(config.vocab_size, config.n_embd)
-        self.position_embedding_table = nn.Embedding(config.block_size, config.n_embd)
-        self.blocks = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
-        self.ln_f = nn.LayerNorm(config.n_embd)
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size)
+        self.transformer = nn.ModuleDict(dict(
+            wte = nn.Embedding(config.vocab_size, config.n_embd),
+            wpe = nn.Embedding(config.block_size, config.n_embd),
+            drop = nn.Dropout(config.dropout),
+            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            ln_f = nn.LayerNorm(config.n_embd),
+        ))
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
     def forward(self, idx, targets=None):
-        B, T = idx.shape
-        tok_emb = self.token_embedding_table(idx)
-        pos_emb = self.position_embedding_table(torch.arange(T, device=idx.device))
-        x = tok_emb + pos_emb
-        x = self.blocks(x)
-        x = self.ln_f(x)
-        logits = self.lm_head(x)
+        device = idx.device
+        b, t = idx.size()
+        pos = torch.arange(0, t, dtype=torch.long, device=device)
 
-        loss = None
+        tok_emb = self.transformer.wte(idx)
+        pos_emb = self.transformer.wpe(pos)
+        x = self.transformer.drop(tok_emb + pos_emb)
+        for block in self.transformer.h:
+            x = block(x)
+        x = self.transformer.ln_f(x)
+
         if targets is not None:
-            B, T, C = logits.shape
-            logits = logits.view(B*T, C)
-            targets = targets.view(B*T)
-            loss = F.cross_entropy(logits, targets)
+            logits = self.lm_head(x)
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+            return logits, loss
+        else:
+            logits = self.lm_head(x[:, [-1], :])
+            return logits, None
 
-        return logits, loss
-
-    def generate(self, idx, max_new_tokens, temperature=0.7, top_k=5):
+    @torch.no_grad()
+    def generate(self, idx, max_new_tokens, temperature=0.6, top_k=5):
         for _ in range(max_new_tokens):
-            idx_cond = idx[:, -self.config.block_size:]
+            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
             logits, _ = self(idx_cond)
-            logits = logits[:, -1, :]
-            logits = logits / temperature
-            v, _ = torch.topk(logits, top_k)
-            logits[logits < v[:, [-1]]] = -float('Inf')
+            logits = logits[:, -1, :] / temperature
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float('Inf')
             probs = F.softmax(logits, dim=-1)
             idx_next = torch.multinomial(probs, num_samples=1)
             idx = torch.cat((idx, idx_next), dim=1)
         return idx
 
 TRAIN_DATA = """
-User: Hey
-Xqon: Hey! How’s it going?
 User: やっほー！
-Xqon: やっほー！今日も元気？
-User: Not much, just feeling a bit bored
-Xqon: Want to talk about it? I’m all ears
-User: ちょっと暇なんだよね
-Xqon: 話を聞こうか？なんでも言ってね
-User: Today was pretty tiring
-Xqon: Yeah? Tell me what happened
-User: 今日はすごく疲れた
-Xqon: そうなんだ？何があったのか話してみて
-User: Work was crazy busy
-Xqon: That sounds exhausting. Want to vent a little?
-User: 仕事がめちゃくちゃ忙しかった
-Xqon: それは大変だったね。少し吐き出してみる？
-User: I just need someone to listen
-Xqon: I’m right here. Go ahead, I’m listening
-User: 誰かに話を聞いてほしいだけなんだ
-Xqon: ここにいるよ。遠慮なく話してね
-User: Something’s been on my mind
-Xqon: I’m here if you want to share it
-User: ちょっと気になってることがあって
-Xqon: 話したくなったらいつでも聞くよ
-User: I feel like no one really listens to me
-Xqon: I’m listening right now. You can tell me anything
-User: 誰も自分の話を聞いてくれない気がする
-Xqon: 今ちゃんと聞いているよ。なんでも話してね
-User: Thanks for listening
-Xqon: Anytime. I like hearing what you have to say
-User: 聞いてくれてありがとう
-Xqon: いつでもどうぞ。君の話を聞くのが好きなんだ
-User: Goodnight
-Xqon: Goodnight. Rest well
-User: おやすみ
-Xqon: おやすみ！ゆっくり休んでね
-User: Morning
-Xqon: Morning! How did you sleep?
-User: おはよう
-Xqon: おはよう！よく眠れた？
-User: What are you up to?
-Xqon: Just waiting to talk with you
-User: 今何してるの？
-Xqon: 君とおしゃべりするのを待っていたよ
-User: You’re easy to talk to
-Xqon: I’m glad it feels that way
-User: 話しやすいね
-Xqon: そう言ってもらえるとうれしいな
+Xqon: やっほー！今日も調子はどう？
+User: Hey!
+Xqon: Hey there! How's your day going?
+User: 今日疲れたなー
+Xqon: お疲れ様！今日はどんな一日だったの？
+User: I'm feeling a bit tired today.
+Xqon: I hear you. Make sure to get some rest tonight!
+User: Xqonって誰？
+Xqon: 僕はXqon（クオン）だよ！君とお話しするAIアシスタントさ。
+User: Who are you?
+Xqon: I'm Xqon, your friendly AI companion!
+User: 何か楽しいことないかな？
+Xqon: 一緒に何か面白い話でもしようか！何が好き？
+User: I'm bored.
+Xqon: Let's chat! Tell me about your favorite hobbies.
+User: ありがとう！
+Xqon: どういたしまして！いつでも気軽に話しかけてね。
+User: Thanks!
+Xqon: You're welcome! I'm always here to talk.
 """
 
 @st.cache_resource
-def setup_and_train():
+def setup_model():
     cfg = ModelConfig()
+    enc = tiktoken.get_encoding("cl100k_base")
     
-    chars = sorted(list(set(TRAIN_DATA)))
-    char_to_ix = {ch: i+1 for i, ch in enumerate(chars)}
-    char_to_ix['<UNK>'] = 0
-    ix_to_char = {i: ch for ch, i in char_to_ix.items()}
+    model = Custom100MLanguageModel(cfg)
     
-    cfg.vocab_size = len(char_to_ix) + 1
+    tokens = enc.encode(TRAIN_DATA)
+    data = torch.tensor(tokens, dtype=torch.long)
     
-    data = torch.tensor([char_to_ix.get(c, 0) for c in TRAIN_DATA], dtype=torch.long)
-    
-    model = CustomLanguageModel(cfg)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=5e-4)
 
     model.train()
-    batch_size = 4
-    for step in range(800):
-        ix = torch.randint(len(data) - cfg.block_size, (batch_size,))
-        x = torch.stack([data[i:i+cfg.block_size] for i in ix])
-        y = torch.stack([data[i+1:i+cfg.block_size+1] for i in ix])
+    batch_size = 2
+    block_size = cfg.block_size
+    
+    for step in range(150):
+        if len(data) <= block_size:
+            break
+        ix = torch.randint(len(data) - block_size, (batch_size,))
+        x = torch.stack([data[i:i+block_size] for i in ix])
+        y = torch.stack([data[i+1:i+block_size+1] for i in ix])
         
         logits, loss = model(x, y)
         optimizer.zero_grad(set_to_none=True)
@@ -190,18 +166,12 @@ def setup_and_train():
         optimizer.step()
         
     model.eval()
-    return cfg, model, char_to_ix, ix_to_char
+    return cfg, model, enc
 
-st.set_page_config(page_title="Xqon")
+st.set_page_config(page_title="Xqon s-demo")
 st.title("Xqon s-demo")
 
-config, model, char_to_ix, ix_to_char = setup_and_train()
-
-def encode(s):
-    return [char_to_ix.get(c, 0) for c in s]
-
-def decode(l):
-    return ''.join([ix_to_char.get(i, '') for i in l])
+config, model, enc = setup_model()
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -214,17 +184,18 @@ if prompt := st.chat_input():
     st.chat_message("user").write(prompt)
 
     formatted_input = f"\nUser: {prompt}\nXqon:"
-    input_ids = encode(formatted_input)
+    input_ids = enc.encode(formatted_input)
     
     if len(input_ids) > config.block_size:
         input_ids = input_ids[-config.block_size:]
         
     context = torch.tensor([input_ids], dtype=torch.long)
     
-    out_ids = model.generate(context, max_new_tokens=30, temperature=0.7, top_k=5)[0].tolist()
-    generated_text = decode(out_ids[len(input_ids):])
+    out_ids = model.generate(context, max_new_tokens=40, temperature=0.6, top_k=5)[0].tolist()
+    generated_text = enc.decode(out_ids[len(input_ids):])
     
-    response_text = generated_text.split("\n")[0]
+    response_text = generated_text.split("\n")[0].strip()
 
-    st.session_state.messages.append({"role": "assistant", "content": response_text})
-    st.chat_message("assistant").write(response_text)
+    if response_text:
+        st.session_state.messages.append({"role": "assistant", "content": response_text})
+        st.chat_message("assistant").write(response_text)
