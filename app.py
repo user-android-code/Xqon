@@ -2,10 +2,9 @@ import streamlit as st
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-import tiktoken
 
 class ModelConfig:
-    vocab_size = 50257
+    vocab_size = 10000
     n_embd = 768
     n_head = 12
     n_layer = 8
@@ -82,6 +81,7 @@ class CustomLanguageModel(nn.Module):
             ln_f = nn.LayerNorm(config.n_embd),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.transformer.wte.weight = self.lm_head.weight
 
     def forward(self, idx, targets=None):
         device = idx.device
@@ -117,6 +117,19 @@ class CustomLanguageModel(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)
         return idx
 
+class CustomTokenizer:
+    def __init__(self, text, vocab_size=10000):
+        chars = sorted(list(set(text)))
+        self.char2idx = {ch: i+1 for i, ch in enumerate(chars)}
+        self.idx2char = {i+1: ch for i, ch in enumerate(chars)}
+        self.vocab_size = vocab_size
+
+    def encode(self, text):
+        return [self.char2idx.get(c, 0) % self.vocab_size for c in text]
+
+    def decode(self, tokens):
+        return "".join([self.idx2char.get(i, "") for i in tokens])
+
 TRAIN_DATA = """
 User: やっほー！
 Xqon: やっほー！今日も調子はどう？
@@ -143,7 +156,7 @@ Xqon: You're welcome! I'm always here to talk.
 @st.cache_resource
 def setup_model():
     cfg = ModelConfig()
-    enc = tiktoken.get_encoding("gpt2")
+    enc = CustomTokenizer(TRAIN_DATA, vocab_size=cfg.vocab_size)
     
     model = CustomLanguageModel(cfg)
     
