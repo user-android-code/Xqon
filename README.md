@@ -1,4 +1,4 @@
-#Xqon s-demo
+# Xqon s-demo
 
 This model is a text-to-text model trained on English and Japanese, and its size is less than 1 GB.
 
