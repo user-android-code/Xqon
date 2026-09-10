@@ -6,9 +6,9 @@ import tiktoken
 
 class ModelConfig:
     vocab_size = 50257
-    n_embd = 768
-    n_head = 12
-    n_layer = 8
+    n_embd = 256
+    n_head = 8
+    n_layer = 4
     block_size = 64
     dropout = 0.1
 
@@ -155,7 +155,7 @@ def setup_model():
     batch_size = 1
     block_size = cfg.block_size
     
-    for step in range(20):
+    for step in range(50):
         if len(data) <= block_size:
             break
         ix = torch.randint(len(data) - block_size, (batch_size,))
