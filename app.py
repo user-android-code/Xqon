@@ -105,7 +105,7 @@ class CustomLanguageModel(nn.Module):
             return logits, None
 
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens, temperature=0.5, top_k=5):
+    def generate(self, idx, max_new_tokens, temperature=0.4, top_k=5):
         for _ in range(max_new_tokens):
             idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
             logits, _ = self(idx_cond)
@@ -155,7 +155,7 @@ def setup_model():
     batch_size = 1
     block_size = cfg.block_size
     
-    for step in range(50):
+    for step in range(80):
         if len(data) <= block_size:
             break
         ix = torch.randint(len(data) - block_size, (batch_size,))
@@ -193,10 +193,10 @@ if prompt := st.chat_input():
         
     context = torch.tensor([input_ids], dtype=torch.long)
     
-    out_ids = model.generate(context, max_new_tokens=40, temperature=0.5, top_k=5)[0].tolist()
-    generated_text = enc.decode(out_ids[len(input_ids):])
+    out_ids = model.generate(context, max_new_tokens=40, temperature=0.4, top_k=5)[0].tolist()
+    generated_text = enc.decode(out_ids[len(input_ids):], errors="replace")
     
-    response_text = generated_text.split("\n")[0].strip()
+    response_text = generated_text.split("\n")[0].replace("User:", "").replace("Xqon:", "").strip()
 
     if response_text:
         st.session_state.messages.append({"role": "assistant", "content": response_text})
