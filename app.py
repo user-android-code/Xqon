@@ -4,7 +4,7 @@ import gc
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 st.set_page_config(page_title="XQon")
-st.title("XQon s-1")
+st.title("XQon s-japanese")
 
 MODEL_ID = "Nagohachi/tiny-lm-japanese-500m-dpo-v1"
 
