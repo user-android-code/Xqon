@@ -1,203 +1,68 @@
 import streamlit as st
 import torch
-import torch.nn as nn
-from torch.nn import functional as F
-import tiktoken
+import gc
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
-class ModelConfig:
-    vocab_size = 50257
-    n_embd = 256
-    n_head = 8
-    n_layer = 4
-    block_size = 64
-    dropout = 0.1
+st.set_page_config(page_title="XQon")
+st.title("XQon s-1")
 
-class Head(nn.Module):
-    def __init__(self, config, head_size):
-        super().__init__()
-        self.key = nn.Linear(config.n_embd, head_size, bias=False)
-        self.query = nn.Linear(config.n_embd, head_size, bias=False)
-        self.value = nn.Linear(config.n_embd, head_size, bias=False)
-        self.register_buffer('tril', torch.tril(torch.ones(config.block_size, config.block_size)))
-        self.dropout = nn.Dropout(config.dropout)
-
-    def forward(self, x):
-        B, T, C = x.shape
-        k = self.key(x)
-        q = self.query(x)
-        wei = q @ k.transpose(-2, -1) * (C ** -0.5)
-        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
-        wei = F.softmax(wei, dim=-1)
-        wei = self.dropout(wei)
-        v = self.value(x)
-        return wei @ v
-
-class MultiHeadAttention(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        head_size = config.n_embd // config.n_head
-        self.heads = nn.ModuleList([Head(config, head_size) for _ in range(config.n_head)])
-        self.proj = nn.Linear(config.n_embd, config.n_embd)
-        self.dropout = nn.Dropout(config.dropout)
-
-    def forward(self, x):
-        out = torch.cat([h(x) for h in self.heads], dim=-1)
-        return self.dropout(self.proj(out))
-
-class FeedForward(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(config.n_embd, 4 * config.n_embd),
-            nn.GELU(),
-            nn.Linear(4 * config.n_embd, config.n_embd),
-            nn.Dropout(config.dropout),
-        )
-
-    def forward(self, x):
-        return self.net(x)
-
-class Block(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.sa = MultiHeadAttention(config)
-        self.ffwd = FeedForward(config)
-        self.ln1 = nn.LayerNorm(config.n_embd)
-        self.ln2 = nn.LayerNorm(config.n_embd)
-
-    def forward(self, x):
-        x = x + self.sa(self.ln1(x))
-        x = x + self.ffwd(self.ln2(x))
-        return x
-
-class CustomLanguageModel(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-        self.transformer = nn.ModuleDict(dict(
-            wte = nn.Embedding(config.vocab_size, config.n_embd),
-            wpe = nn.Embedding(config.block_size, config.n_embd),
-            drop = nn.Dropout(config.dropout),
-            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            ln_f = nn.LayerNorm(config.n_embd),
-        ))
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        self.transformer.wte.weight = self.lm_head.weight
-
-    def forward(self, idx, targets=None):
-        device = idx.device
-        b, t = idx.size()
-        pos = torch.arange(0, t, dtype=torch.long, device=device)
-
-        tok_emb = self.transformer.wte(idx)
-        pos_emb = self.transformer.wpe(pos)
-        x = self.transformer.drop(tok_emb + pos_emb)
-        for block in self.transformer.h:
-            x = block(x)
-        x = self.transformer.ln_f(x)
-
-        if targets is not None:
-            logits = self.lm_head(x)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
-            return logits, loss
-        else:
-            logits = self.lm_head(x[:, [-1], :])
-            return logits, None
-
-    @torch.no_grad()
-    def generate(self, idx, max_new_tokens, temperature=0.4, top_k=5):
-        for _ in range(max_new_tokens):
-            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
-            logits, _ = self(idx_cond)
-            logits = logits[:, -1, :] / temperature
-            if top_k is not None:
-                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                logits[logits < v[:, [-1]]] = -float('Inf')
-            probs = F.softmax(logits, dim=-1)
-            idx_next = torch.multinomial(probs, num_samples=1)
-            idx = torch.cat((idx, idx_next), dim=1)
-        return idx
-
-TRAIN_DATA = """
-User: こんにちは
-Xqon: こんにちは！今日も調子はどう？
-User: やっほー！
-Xqon: やっほー！今日も調子はどう？
-User: Hey!
-Xqon: Hey there! How's your day going?
-User: 今日疲れたなー
-Xqon: お疲れ様！今日はどんな一日だったの？
-User: I'm feeling a bit tired today.
-Xqon: I hear you. Make sure to get some rest tonight!
-User: Xqonって誰？
-Xqon: 僕はXqon（クオン）だよ！君とお話しするAIアシスタントさ。
-User: Who are you?
-Xqon: I'm Xqon, your friendly AI companion!
-User: 何か楽しいことないかな？
-Xqon: 一緒に何か面白い話でもしようか！何が好き？
-User: ありがとう！
-Xqon: どういたしまして！いつでも気軽に話しかけてね。
-"""
+MODEL_ID = "Nagohachi/tiny-lm-japanese-500m-dpo-v1"
 
 @st.cache_resource
-def setup_model():
-    cfg = ModelConfig()
-    enc = tiktoken.get_encoding("gpt2")
-    
-    model = CustomLanguageModel(cfg)
-    
-    tokens = enc.encode(TRAIN_DATA)
-    data = torch.tensor(tokens, dtype=torch.long)
-    
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+def load_model():
+    tokenizer = AutoTokenizer.from_pretrained(
+        MODEL_ID, 
+        trust_remote_code=True
+    )
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_ID,
+        torch_dtype=torch.float16,
+        device_map="auto",
+        trust_remote_code=True
+    )
+    return tokenizer, model
 
-    model.train()
-    batch_size = 1
-    block_size = cfg.block_size
-    
-    for step in range(80):
-        if len(data) <= block_size:
-            break
-        ix = torch.randint(len(data) - block_size, (batch_size,))
-        x = torch.stack([data[i:i+block_size] for i in ix])
-        y = torch.stack([data[i+1:i+block_size+1] for i in ix])
-        
-        logits, loss = model(x, y)
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        optimizer.step()
-        
-    model.eval()
-    return cfg, model, enc
-
-st.set_page_config(page_title="Xqon s-demo")
-st.title("Xqon s-demo")
-
-config, model, enc = setup_model()
+tokenizer, model = load_model()
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 for msg in st.session_state.messages:
-    st.chat_message(msg["role"]).write(msg["content"])
+    with st.chat_message(msg["role"]):
+        st.write(msg["content"])
 
-if prompt := st.chat_input():
+if prompt := st.chat_input(""):
     st.session_state.messages.append({"role": "user", "content": prompt})
-    st.chat_message("user").write(prompt)
+    with st.chat_message("user"):
+        st.write(prompt)
 
-    formatted_input = f"\nUser: {prompt}\nXqon:"
-    input_ids = enc.encode(formatted_input)
-    
-    if len(input_ids) > config.block_size:
-        input_ids = input_ids[-config.block_size:]
-        
-    context = torch.tensor([input_ids], dtype=torch.long)
-    
-    out_ids = model.generate(context, max_new_tokens=40, temperature=0.4, top_k=5)[0].tolist()
-    generated_text = enc.decode(out_ids[len(input_ids):], errors="replace")
-    
-    response_text = generated_text.split("\n")[0].replace("User:", "").replace("Xqon:", "").strip()
+    with st.chat_message("assistant"):
+        with st.spinner(""):
+            messages = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
+            
+            try:
+                input_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            except Exception:
+                input_text = prompt
 
-    if response_text:
-        st.session_state.messages.append({"role": "assistant", "content": response_text})
-        st.chat_message("assistant").write(response_text)
+            inputs = tokenizer(input_text, return_tensors="pt").to(model.device)
+
+            with torch.no_grad():
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=128,
+                    temperature=0.7,
+                    top_p=0.9,
+                    do_sample=True,
+                    pad_token_id=tokenizer.eos_token_id
+                )
+
+            input_length = inputs["input_ids"].shape[1]
+            response = tokenizer.decode(outputs[0][input_length:], skip_special_tokens=True)
+
+            st.write(response)
+            st.session_state.messages.append({"role": "assistant", "content": response})
+
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
