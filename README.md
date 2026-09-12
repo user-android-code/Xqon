@@ -1,5 +1,11 @@
 # XQon s-japanese
 
-This model is a text-to-text model trained on English and Japanese, and its size is less than 1 GB.
-
-このモデルは、日本語で学習されたtext-to-textモデルであり、サイズは1GB未満です。
+## text-to-text model
+This AI is designed to handle 
+conversations in Japanese. It is built 
+using Streamlit and is designed to stay 
+within the 1GB limit. However, please 
+note that XQon is an AI and may provide 
+inaccurate information; therefore, you 
+should verify important information using
+other sources.
