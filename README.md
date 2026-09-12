@@ -1,6 +1,7 @@
 # XQon s-japanese
 
-## text-to-text model
+text-to-text model
+
 This AI is designed to handle 
 conversations in Japanese. It is built 
 using Streamlit and is designed to stay 
